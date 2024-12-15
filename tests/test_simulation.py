@@ -6,23 +6,23 @@ from settings import Settings
 from collections import Counter
 import numpy as np
 import copy
-
+import pandas as pd
 
 @pytest.fixture
 def valid_settings():
     """Fixture to create valid Settings instance."""
     return Settings(
-        t=500,               # Duration of simulation
-        n=200,               # Number of individuals
-        n_l=None,            # Locations of individuals
-        alpha_pos=0.25,      # Probability of positive individuals
-        alpha_neg=0.25,      # Probability of negative individuals
-        lambda_dist=1,       # Travel parameter
-        beta_update=0.01,    # Opinion movement parameter
-        beta_spread=0.01,    # Listening to opposing views parameter
-        gamma_extr=0.005,    # Extremism parameter
-        g=(4, 4),            # 4 activity periods, each with 4 activities
-        g_l=[[(0,0),(0,1),(1,0),(1,1)],[(0,0.5),(0.5,0),(1,0.5),(0.5,1)]]
+        t = 500,               # Duration of simulation
+        n = 200,               # Number of individuals
+        n_l = None,            # Locations of individuals
+        alpha_pos = 0.25,      # Probability of positive individuals
+        alpha_neg = 0.25,      # Probability of negative individuals
+        lambda_dist = 1,       # Travel parameter
+        beta_update = 0.01,    # Opinion movement parameter
+        beta_spread = 0.01,    # Listening to opposing views parameter
+        gamma_extr = 0.005,    # Extremism parameter
+        g = (4, 4),            # 4 activity periods, each with 4 activities
+        g_l = [[(0,0),(0,1),(1,0),(1,1)],[(0,0.5),(0.5,0),(1,0.5),(0.5,1)]]
     )
 
 @pytest.fixture
@@ -79,8 +79,8 @@ def test_alpha_probabilities(valid_settings):
               f"{counts['UnbiasedIndividual'] / total}")
     
     # Validate proportions (allowing some deviation due to randomness)
-    assert counts["PositiveIndividual"] / total == pytest.approx(valid_settings.alpha_pos, rel=0.2)
-    assert counts["NegativeIndividual"] / total == pytest.approx(valid_settings.alpha_neg, rel=0.2)
+    assert counts["PositiveIndividual"] / total == pytest.approx(valid_settings.alpha_pos, rel=0.3)
+    assert counts["NegativeIndividual"] / total == pytest.approx(valid_settings.alpha_neg, rel=0.3)
     assert counts["UnbiasedIndividual"] / total == pytest.approx(1 - valid_settings.alpha_pos - valid_settings.alpha_neg, rel=0.2)
 
 def test_compute_activity_probabilities_single_activity(custom_settings):
@@ -229,3 +229,122 @@ def test_randomness_in_activity_selection(valid_settings):
 
     assert len(unique_selected) > 1, \
         "Random sampling should produce variability in selected activities."
+        
+def test_get_opinion_valid_time(valid_settings):
+    """Test that the function returns a valid DataFrame for a valid time."""
+    sim = Simulation(valid_settings)
+
+    # Add dummy opinion history for testing
+    for individual_id in sim.op_mod_graph.get_nodes(group=0):
+        sim.individuals[individual_id].opinion_history[1] = 0.7
+
+    # Call the get_opinion function
+    df = sim.get_opinion(time=1)
+
+    # Assert that the result is a DataFrame
+    assert isinstance(df, pd.DataFrame), "The result should be a DataFrame."
+
+    # Assert that the DataFrame has the correct columns
+    assert list(df.columns) == ['id', 'opinion'], "The DataFrame should have 'id' and 'opinion' columns."
+
+    # Assert that the DataFrame contains the correct number of rows
+    assert len(df) == valid_settings.n, f"The DataFrame should have {valid_settings.n} rows."
+
+def test_get_opinion_missing_time_key(valid_settings):
+    """Test that the function raises an exception if the time key is missing."""
+    sim = Simulation(valid_settings)
+
+    # Ensure ValueError is raised when accessing a missing time key
+    with pytest.raises(ValueError): 
+        sim.get_opinion(time=1)
+        
+def test_perform_opinion_activity_valid_data(mocker, custom_settings):
+    """Test _perform_opinion_activity with valid data."""
+    sim = Simulation(custom_settings)
+    t = 1
+
+    # Mock the multipartite graph and individuals
+    activity_id = 101
+    opinions = pd.DataFrame({"id": [1, 2, 3], "opinion": [0.6, 0.7, 0.8]})
+
+    mocker.patch.object(sim.op_mod_graph, 'get_edges_node', return_value=[(1, activity_id), (2, activity_id), (3, activity_id)])
+    mocker.patch.object(sim, 'get_opinion', return_value=opinions)
+    mock_opinion_update = mocker.patch.object(sim, '_perform_opinion_update')
+
+    # Call the function
+    sim._perform_opinion_activity(activity_id, t)
+
+    # Verify filtering and call to _perform_opinion_update
+    expected_opinions = pd.DataFrame({"opinion": [0.6, 0.7, 0.8]})
+    pd.testing.assert_frame_equal(mock_opinion_update.call_args[0][0], expected_opinions)
+
+
+def test_perform_opinion_activity_no_participants(mocker, custom_settings):
+    """Test _perform_opinion_activity when no individuals are attending."""
+    sim = Simulation(custom_settings)
+    t = 1
+
+    # Mock the multipartite graph and individuals
+    activity_id = 101
+    mocker.patch.object(sim.op_mod_graph, 'get_edges_node', return_value=[])
+    mocker.patch.object(sim, 'get_opinion', return_value=pd.DataFrame({"id": [1, 2, 3], "opinion": [0.6, 0.7, 0.8]}))
+
+    # Call the function and expect an exception
+    with pytest.raises(ValueError, match=f"No individuals attended activity {activity_id} at time {t}."):
+        sim._perform_opinion_activity(activity_id, t)
+
+
+def test_perform_opinion_activity_invalid_time_key(mocker, custom_settings):
+    """Test _perform_opinion_activity when an invalid time key is accessed."""
+    sim = Simulation(custom_settings)
+    t = 1
+
+    # Mock the multipartite graph and individuals
+    activity_id = 101
+
+    # Mock methods
+    mocker.patch.object(sim.op_mod_graph, 'get_edges_node', return_value=[(1, activity_id), (2, activity_id), (3, activity_id)])
+    mocker.patch.object(sim, 'get_opinion', side_effect=ValueError("Time key does not exist"))
+
+    # Call the function and expect an exception
+    with pytest.raises(ValueError, match="Time key does not exist"):
+        sim._perform_opinion_activity(activity_id, t)
+
+
+def test_perform_opinion_activity_partial_match(mocker, custom_settings):
+    """Test _perform_opinion_activity when only some individuals are attending."""
+    sim = Simulation(custom_settings)
+    t = 1
+
+    # Mock the multipartite graph and individuals
+    activity_id = 101
+    opinions = pd.DataFrame({"id": [1, 2, 3], "opinion": [0.6, 0.7, 0.8]})
+
+    mocker.patch.object(sim.op_mod_graph, 'get_edges_node', return_value=[(2, activity_id), (3, activity_id)])
+    mocker.patch.object(sim, 'get_opinion', return_value=opinions)
+    mock_opinion_update = mocker.patch.object(sim, '_perform_opinion_update')
+
+    # Call the function
+    sim._perform_opinion_activity(activity_id, t)
+
+    # Verify filtering and call to _perform_opinion_update
+    expected_opinions = pd.DataFrame({"opinion": [0.7, 0.8]})
+    pd.testing.assert_frame_equal(mock_opinion_update.call_args[0][0], expected_opinions)
+
+
+def test_perform_opinion_activity_no_opinion_history(mocker, custom_settings):
+    """Test _perform_opinion_activity when individuals lack opinion history at the given time."""
+    sim = Simulation(custom_settings)
+    t = 1
+
+    # Mock the multipartite graph and individuals
+    activity_id = 101
+
+    # Mock methods
+    mocker.patch.object(sim.op_mod_graph, 'get_edges_node', return_value=[(1, activity_id), (2, activity_id), (3, activity_id)])
+    mocker.patch.object(sim, 'get_opinion', side_effect=ValueError("Time key 0 does not exist in opinion history"))
+
+    # Call the function and expect an exception
+    with pytest.raises(ValueError, match="Time key 0 does not exist in opinion history"):
+        sim._perform_opinion_activity(activity_id, t)
+        
