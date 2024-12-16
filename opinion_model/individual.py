@@ -25,7 +25,7 @@ class Individual():
         return f"{self.id}"
         
     def __str__(self):
-        return f"{self.id} ({self.location.x},{self.location.y}) with opinion {self.opinion}"  
+        return f"{self.id} {self.location} with opinion {self.opinion}"  
         
 class PositiveIndividual(Individual):
     """

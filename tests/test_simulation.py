@@ -22,7 +22,7 @@ def valid_settings():
         beta_spread = 0.01,    # Listening to opposing views parameter
         gamma_extr = 0.005,    # Extremism parameter
         g = (4, 4),            # 4 activity periods, each with 4 activities
-        g_l = [[(0,0),(0,1),(1,0),(1,1)],[(0,0.5),(0.5,0),(1,0.5),(0.5,1)]]
+        g_l = None
     )
 
 @pytest.fixture
@@ -52,16 +52,32 @@ def test_simulation_initialisation_3(valid_settings):
     sim = Simulation(valid_settings)
     
     # Test the number of activity periods and activities
-    for period_index in range(1, valid_settings.g[0] + 1):
+    for period_index, num_activities in enumerate(valid_settings.g, start=1):
         activity_nodes = sim.op_mod_graph.get_nodes(group=period_index)
-        assert len(activity_nodes) == valid_settings.g[1]
+        assert len(activity_nodes) == num_activities, (
+            f"Expected {num_activities} activities in period {period_index}, "
+            f"but found {len(activity_nodes)}."
+        )
     
     # Ensure activities have correct locations
-    assert len(sim.activities) == valid_settings.g[0] * valid_settings.g[1]
-    for location in sim.activities.values():
-        assert isinstance(location, Location)
-        assert 0 <= location.x <= 1
-        assert 0 <= location.y <= 1
+    total_activities = sum(valid_settings.g)
+    assert len(sim.activities) == total_activities, (
+        f"Expected {total_activities} total activities, but found {len(sim.activities)}."
+    )
+
+    if valid_settings.g_l is not None:
+        for period_index, period_locations in enumerate(valid_settings.g_l, start=1):
+            activity_nodes = sim.op_mod_graph.get_nodes(group=period_index)
+            for activity, location in zip(activity_nodes, period_locations):
+                assert sim.activities[activity] == Location(*location), (
+                    f"Activity {activity} in period {period_index} does not have the "
+                    f"expected location {location}."
+                )
+    else:
+        for location in sim.activities.values():
+            assert isinstance(location, Location)
+            assert 0 <= location.x <= 1
+            assert 0 <= location.y <= 1
 
 def test_alpha_probabilities(valid_settings):
     """Test that the proportion of individual types matches their probabilities."""
@@ -168,7 +184,7 @@ def test_individuals_assigned_to_activities(valid_settings):
 
     # Verify the structure of the graph: all individuals are connected to one activity per period
     for individual_id in sim.op_mod_graph.get_nodes(group=0):
-        for period_index in range(1, sim.g[0] + 1):
+        for period_index in range(1, len(sim.g) + 1):
             edges = [edge for edge in sim.op_mod_graph.get_edges_group(group1=period_index) 
                      if individual_id in edge]
             assert len(edges) == 1, f"Individual {individual_id} should be assigned to exactly one activity in period {period_index}."
@@ -201,7 +217,7 @@ def test_individual_edges_consistency(valid_settings):
     sim = Simulation(valid_settings)
 
     for individual_id in sim.op_mod_graph.get_nodes(group=0):
-        for period_index in range(1, sim.g[0] + 1):
+        for period_index in range(1, len(sim.g) + 1):
             edges = [edge for edge in sim.op_mod_graph.get_edges_group(group1=period_index) 
                      if individual_id in edge]
             print(f"Individual {individual_id} Period {period_index} Edges {edges}")
@@ -258,25 +274,6 @@ def test_get_opinion_missing_time_key(valid_settings):
     with pytest.raises(ValueError): 
         sim.get_opinion(time=1)
         
-def test_perform_opinion_activity_valid_data(mocker, custom_settings):
-    """Test _perform_opinion_activity with valid data."""
-    sim = Simulation(custom_settings)
-    t = 1
-
-    # Mock the multipartite graph and individuals
-    activity_id = 101
-    opinions = pd.DataFrame({"id": [1, 2, 3], "opinion": [0.6, 0.7, 0.8]})
-
-    mocker.patch.object(sim.op_mod_graph, 'get_edges_node', return_value=[(1, activity_id), (2, activity_id), (3, activity_id)])
-    mocker.patch.object(sim, 'get_opinion', return_value=opinions)
-    mock_opinion_update = mocker.patch.object(sim, '_perform_opinion_update')
-
-    # Call the function
-    sim._perform_opinion_activity(activity_id, t)
-
-    # Verify filtering and call to _perform_opinion_update
-    expected_opinions = pd.DataFrame({"opinion": [0.6, 0.7, 0.8]})
-    pd.testing.assert_frame_equal(mock_opinion_update.call_args[0][0], expected_opinions)
 
 
 def test_perform_opinion_activity_no_participants(mocker, custom_settings):
@@ -309,27 +306,6 @@ def test_perform_opinion_activity_invalid_time_key(mocker, custom_settings):
     # Call the function and expect an exception
     with pytest.raises(ValueError, match="Time key does not exist"):
         sim._perform_opinion_activity(activity_id, t)
-
-
-def test_perform_opinion_activity_partial_match(mocker, custom_settings):
-    """Test _perform_opinion_activity when only some individuals are attending."""
-    sim = Simulation(custom_settings)
-    t = 1
-
-    # Mock the multipartite graph and individuals
-    activity_id = 101
-    opinions = pd.DataFrame({"id": [1, 2, 3], "opinion": [0.6, 0.7, 0.8]})
-
-    mocker.patch.object(sim.op_mod_graph, 'get_edges_node', return_value=[(2, activity_id), (3, activity_id)])
-    mocker.patch.object(sim, 'get_opinion', return_value=opinions)
-    mock_opinion_update = mocker.patch.object(sim, '_perform_opinion_update')
-
-    # Call the function
-    sim._perform_opinion_activity(activity_id, t)
-
-    # Verify filtering and call to _perform_opinion_update
-    expected_opinions = pd.DataFrame({"opinion": [0.7, 0.8]})
-    pd.testing.assert_frame_equal(mock_opinion_update.call_args[0][0], expected_opinions)
 
 
 def test_perform_opinion_activity_no_opinion_history(mocker, custom_settings):

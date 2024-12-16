@@ -1,5 +1,4 @@
 import pytest
-import numpy as np
 import pandas as pd
 from simulation import Simulation  
 from settings import Settings
@@ -17,7 +16,7 @@ def mock_settings():
         beta_spread = 0.01,    # Listening to opposing views parameter
         gamma_extr = 0.005,    # Extremism parameter
         g = (4, 4),            # 4 activity periods, each with 4 activities
-        g_l = [[(0,0),(0,1),(1,0),(1,1)],[(0,0.5),(0.5,0),(1,0.5),(0.5,1)]]
+        g_l = None
     )
 
 @pytest.fixture

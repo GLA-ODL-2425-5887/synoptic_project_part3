@@ -3,7 +3,6 @@ from opinion_model.individual import NegativeIndividual
 from opinion_model.individual import PositiveIndividual
 from opinion_model.individual import UnbiasedIndividual
 from opinion_model.location import Location
-from collections import Counter
 import numpy as np
 import random
 import pandas as pd
@@ -12,6 +11,20 @@ class Simulation:
     """
     A class representing an opinion model simulation.
     """
+    categories = {
+        "ExtremeAgainst": (0.0, 0.2),
+        "ModerateAgainst": (0.2, 0.4),
+        "Neutral": (0.4, 0.6),
+        "ModerateFor": (0.6, 0.8),
+        "ExtremeFor": (0.8, 1.0)
+    }
+    
+    @classmethod
+    def _categorise_opinion(cls, opinion):
+        for category, (low, high) in Simulation.categories.items():
+            if low <= opinion < high:
+                return category
+        return None
     
     @classmethod
     def ensemble_statistics(cls):
@@ -29,9 +42,10 @@ class Simulation:
         Parameters:
             settings (Settings)
         """
-        
-        self.n = settings.n  # Number of individuals in simulation
-        self.g = settings.g  # Number of activity periods and activities
+        self.n = settings.n     # Number of individuals in simulation
+        self.n_l = settings.n_l # Locations for individuals
+        self.g = settings.g     # Number of activity periods and activities
+        self.g_l = settings.g_l # Locations for activities
         
         if(self.g[0] <= 0 or self.g[1] <= 0):
             raise ValueError("Number of activity periods and activies must be greater than zero")
@@ -78,25 +92,45 @@ class Simulation:
                 self.individuals[id] = PositiveIndividual(settings)
             else:
                 self.individuals[id] = UnbiasedIndividual(settings)
+                
+        if self.n_l is not None:
+            if len(self.n_l) < self.n:
+                raise ValueError("Mismatch between n_l dimensions and number of individuals.")
+            
+            # Loop through individuals and assign locations sequentially using n_l values
+            for i, individual_id in enumerate(self.individuals):
+                self.individuals[individual_id].location = Location(*self.n_l[i])    
         
-        # Iterate through activity periods and add their activities
-        for period_index in range(1, self.g[0]+1):  
-        
-            # Add activities for the current period and store their locations
+        # Iterate through periods and assign activities with locations
+        for period_index, activity_count in enumerate(self.g, start=1):  
+            # Create activities for the current period
             activities = [
                 self.op_mod_graph.add_node(group=period_index)
-                for _ in range(self.g[1])
+                for _ in range(activity_count)
             ]
-            self.activities.update({
-                activity: Location(random.uniform(0, 1), random.uniform(0, 1))
-                for activity in activities
-            })
-            
+
+            # Assign locations based on g_l if provided, otherwise use random locations
+            if self.g_l is not None:
+                if len(self.g_l) < len(self.g) or len(self.g_l[period_index - 1]) < activity_count:
+                    raise ValueError("Mismatch between g_l dimensions and activity periods or counts.")
+
+                # Assign locations from g_l for the current period
+                self.activities.update({
+                    activity: Location(*self.g_l[period_index - 1][i])
+                    for i, activity in enumerate(activities)
+                })
+            else:
+                # Assign random locations if g_l is not provided
+                self.activities.update({
+                    activity: Location(random.uniform(0, 1), random.uniform(0, 1))
+                    for activity in activities
+                })
+
         # Allocate each individual to one activity in each activity period
         for individual_id in self.op_mod_graph.get_nodes(group=0):
             x, y = self.individuals[individual_id].location.x, self.individuals[individual_id].location.y
 
-            for period_index in range(1, self.g[0] + 1):
+            for period_index in range(1, len(self.g) + 1):
                 # Compute probabilities for the individual's selection of activities in the current period
                 activity_probabilities = self._compute_activity_probabilities(x, y, period_index)
 
@@ -252,45 +286,74 @@ class Simulation:
         pass
 
     def _most_polarised(self):
-        
-        # Initialize empty counters for each day
-        extreme_counts = {
-            "ExtremeAgainst": [0] * self.t,
-            "ExtremeFor": [0] * self.t,
-            "ExtremeEither": [0] * self.t
-        }
-
-        # Aggregate daily counts across all individuals
-        for day, opinions in enumerate(zip(*(individual.opinion_history for individual in self.individuals))):
-            counts = Counter(opinions)
-            extreme_counts["ExtremeFor"][day] = counts[1]
-            extreme_counts["ExtremeAgainst"][day] = counts[0]
-            extreme_counts["ExtremeEither"][day] = counts[0] + counts[1]
-    
-        return extreme_counts
-
+       pass
+   
     def most_polarised(self):
-        extreme_counts = self._most_polarised()
-        
-        max_extreme_count = {
-            "ExtremeAgainst": max(extreme_counts["ExtremeAgainst"]),
-            "ExtremeFor": max(extreme_counts["ExtremeFor"]),
-            "ExtremeEither": max(extreme_counts["ExtremeEither"])
-        }
-    
-        return max_extreme_count
+        pass
     
     def most_polarised_day(self):
-        extreme_counts = self._most_polarised()
+        pass
     
-        max_extreme_day = {
-            "ExtremeAgainst": extreme_counts["ExtremeAgainst"].index(max(extreme_counts["ExtremeAgainst"])),
-            "ExtremeFor": extreme_counts["ExtremeFor"].index(max(extreme_counts["ExtremeFor"])),
-            "ExtremeEither": extreme_counts["ExtremeEither"].index(max(extreme_counts["ExtremeEither"]))
-        }
+    def activity_summary(self, t):
+        """
+        Summarizes opinions of individuals at time `t` into specified categories, grouped by activity.
+        
+        Parameters:
+            t (int): The time step for which opinions are being summarized.
+            
+        Returns:
+            pd.DataFrame: A summary DataFrame grouped by activity, with counts for each category.
+        """
+        # Initialize an empty list to collect data
+        data = []
+        
+        # For each activity...
+        for activity in self.activities:
+            # Find all activity participants
+            individual_ids = [edge[0] for edge in self.op_mod_graph.get_edges_node(activity)]
+               
+            # Iterate through individuals in the activity and collect their opinions at time `t`
+            for individual_id in individual_ids:
+                if t in self.individuals[individual_id].opinion_history:
+                    data.append({
+                        "Activity": activity,
+                        "id": individual_id,
+                        "opinion": self.individuals[individual_id].opinion_history[t]
+                    })
     
-        return max_extreme_day
+        # Create a DataFrame from the collected data
+        df_summary = pd.DataFrame(data)
+        
+        # If no data was collected, return an empty DataFrame
+        if df_summary.empty:
+            return pd.DataFrame(columns=["Activity"] + list(Simulation.categories.keys()))
     
+        # Categorize opinions
+        df_summary["category"] = df_summary["opinion"].apply(Simulation._categorise_opinion)
+        
+        # Group by Activity and category, and calculate counts
+        df_grouped = (
+            df_summary.groupby(["Activity", "category"])
+            .size()
+            .reset_index(name="count")  # Reset the index to flatten the grouped result
+        )
+        
+        # Pivot the DataFrame to wide format
+        df_pivot = df_grouped.pivot_table(
+            index = "Activity",  # Rows are activities
+            columns = "category",  # Columns are categories
+            values = "count",  # Values are counts
+            fill_value = 0  # Replace missing values with 0
+        )
+        
+        # Ensure categories appear in the desired order, setting missing categories to 0
+        all_categories = list(Simulation.categories.keys()) 
+        df_pivot = df_pivot.reindex(columns=all_categories, fill_value=0)
+        
+        # Convert counts to integers to remove any decimal points
+        df_pivot = df_pivot.astype(int)
+        return df_pivot
+        
     def individual_summary(self):
         pass
     
