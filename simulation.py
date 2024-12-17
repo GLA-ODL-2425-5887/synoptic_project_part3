@@ -6,6 +6,9 @@ from opinion_model.location import Location
 import numpy as np
 import random
 import pandas as pd
+import matplotlib.pyplot as plt
+from matplotlib.collections import LineCollection
+from matplotlib.patches import Patch
 
 class Simulation:
     """
@@ -77,9 +80,9 @@ class Simulation:
         self.individuals = {}  # Use a dictionary to hold a map of the individuals created by the simulation
         self.activities = {}  # Use a dictionary to hold a map the activities created by the simulation
         
-        # Define a Multipartite Graph with g[0]+1 groups
-        # Group 0 holds individuals, and Groups 1 to g[0] represent activity periods
-        self.op_mod_graph = Multipartite(self.g[0]+1)
+        # Define a Multipartite Graph with len(g)+1 groups
+        # Group 0 holds individuals, and Groups 1 to len(g)] represent activity periods
+        self.op_mod_graph = Multipartite(len(self.g)+1)
         
         # Store the individuals in the first group of the opinion model
         for i in choices:
@@ -94,7 +97,7 @@ class Simulation:
                 self.individuals[id] = UnbiasedIndividual(settings)
                 
         if self.n_l is not None:
-            if len(self.n_l) < self.n:
+            if len(self.n_l) != self.n:
                 raise ValueError("Mismatch between n_l dimensions and number of individuals.")
             
             # Loop through individuals and assign locations sequentially using n_l values
@@ -271,28 +274,237 @@ class Simulation:
       
     def run(self):
         
-        # For each day in total number of days, t...
-        for day in range(1, self.t):
-            
-            # Iterate through all activity identifiers...
-            for activity in self.activities.keys():
-                # Update the opinion of each individual attending each activity
-                self._perform_opinion_activity(activity, day)
+        num_activity_periods = len(self.g)  
         
-    def plot_network(self):
-        pass
+        # For each day in total number of time periods, t...
+        for t in range(1, self.t+1):
+       
+            # Determine the group to process (done in a circular fashion so that
+            # only one activity period is processed per time period)
+            activity_period_index = (t-1) % num_activity_periods 
+            current_activity_period = 1 + activity_period_index  
+            
+            # Retrieve activities for the specified group
+            activities = {
+                activity_id: self.activities[activity_id]
+                for activity_id in self.op_mod_graph.get_nodes(group=current_activity_period)
+                if activity_id in self.activities
+            }
+           
+            # Iterate through all activity identifiers...
+            for activity in activities.keys():
+                # Update the opinion of each individual attending each activity
+                self._perform_opinion_activity(activity, t)
+        
+    def plot_network(self, time):
+        """
+        Plot the state of the population and activities at the given time.
+    
+        Args:
+            time (int): The time point at which to plot the network.
+        """
+        # Define opinion group ranges and their colors
+        opinion_colors = {
+            "ExtremeAgainst": (0.0, 0.2, "red"),
+            "ModerateAgainst": (0.2, 0.4, "orange"),
+            "Neutral": (0.4, 0.6, "gray"),
+            "ModerateFor": (0.6, 0.8, "blue"),
+            "ExtremeFor": (0.8, 1.0, "green")
+        }
+    
+        # Initialize figure
+        fig, ax = plt.subplots(figsize=(8, 8))
+    
+        # Plot individuals
+        individuals_x = []
+        individuals_y = []
+        individual_colors = []
+        for individual in self.individuals.values():
+            if time in individual.opinion_history:
+                opinion = individual.opinion_history[time]
+                x, y = individual.location.x, individual.location.y
+                individuals_x.append(x)
+                individuals_y.append(y)
+    
+                # Assign a color based on opinion
+            color_assigned = False
+            for category, (lower, upper, color) in opinion_colors.items():
+                if lower <= opinion < upper:
+                    individual_colors.append(color)
+                    color_assigned = True
+                    break
+
+            # Handle missing color (shouldn't happen, but safeguard)
+            if not color_assigned:
+                individual_colors.append("black")  # Default to black if no range matches
+
+        # Ensure no mismatch in lengths
+        assert len(individuals_x) == len(individual_colors), (
+            f"Mismatch in sizes: {len(individuals_x)} coordinates but {len(individual_colors)} colors"
+            )
+        ax.scatter(individuals_x, individuals_y, c=individual_colors, s=50, label="Individuals")
+    
+        # Plot activities
+        activity_x = []
+        activity_y = []
+        activity_edges = []
+        for activity_id, activity in self.activities.items():
+            x, y = x, y = activity.x, activity.y
+            activity_x.append(x)
+            activity_y.append(y)
+
+            # Find participants of the activity
+            participants = [edge[0] for edge in self.op_mod_graph.get_edges_node(activity_id)]
+            for participant_id in participants:
+                participant = self.individuals[participant_id]
+                if time in participant.opinion_history:
+                    activity_edges.append(((participant.location.x, participant.location.y), (x, y)))
+    
+        ax.scatter(activity_x, activity_y, c="black", s=100, marker="^", label="Activities")
+    
+        # Add edges (lines) between participants and activities
+        if activity_edges:
+            line_segments = LineCollection(activity_edges, colors="black", linewidths=0.5)
+            ax.add_collection(line_segments)
+    
+        # Add legend
+        legend_elements = [
+            Patch(facecolor=color, edgecolor="black", label=label)
+            for label, (_, _, color) in opinion_colors.items()
+        ]
+        legend_elements.append(Patch(facecolor="black", edgecolor="black", label="Activities"))
+        ax.legend(handles=legend_elements, loc="upper right")
+    
+        # Set plot limits and labels
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1)
+        ax.set_xlabel("X Location")
+        ax.set_ylabel("Y Location")
+        ax.set_title(f"Network State at Time {time}")
+    
+        plt.show()
+
     
     def chart(self):
         pass
 
-    def _most_polarised(self):
-       pass
-   
     def most_polarised(self):
-        pass
+        """
+        Calculate the most polarised moments in the simulation, returning:
+        - The maximal number of individuals who were ExtremeAgainst at any one time.
+        - The maximal number of individuals who were ExtremeFor at any one time.
+        - The maximal number of individuals in either extreme group at any one time.
     
+        Returns:
+            dict: A dictionary with three keys:
+                  'extreme_against': maximal count of ExtremeAgainst individuals,
+                  'extreme_for': maximal count of ExtremeFor individuals,
+                  'total_extremes': maximal count of all individuals in extreme groups.
+        """
+        # Retrieve thresholds from categories
+        extreme_against_range = self.categories["ExtremeAgainst"]
+        extreme_for_range = self.categories["ExtremeFor"]
+    
+        max_extreme_against = 0
+        max_extreme_for = 0
+        max_total_extremes = 0
+    
+        # Identify all time steps across all individuals
+        time_periods = set()
+        for individual in self.individuals.values():
+            time_periods.update(individual.opinion_history.keys())
+        time_periods = sorted(time_periods)  # Ensure sorted order
+    
+        for t in time_periods:
+            num_extreme_against = 0
+            num_extreme_for = 0
+    
+            # Count individuals in extreme categories at time t
+            for individual in self.individuals.values():
+                if t in individual.opinion_history:
+                    opinion = individual.opinion_history[t]
+                    if extreme_against_range[0] <= opinion < extreme_against_range[1]:
+                        num_extreme_against += 1
+                    elif extreme_for_range[0] <= opinion <= extreme_for_range[1]:
+                        num_extreme_for += 1
+    
+            total_extremes = num_extreme_against + num_extreme_for
+    
+            # Update maximums
+            max_extreme_against = max(max_extreme_against, num_extreme_against)
+            max_extreme_for = max(max_extreme_for, num_extreme_for)
+            max_total_extremes = max(max_total_extremes, total_extremes)
+    
+        return {
+            "extreme_against": max_extreme_against,
+            "extreme_for": max_extreme_for,
+            "total_extremes": max_total_extremes,
+        }
+
     def most_polarised_day(self):
-        pass
+        """
+        Find the day with the maximum polarisation based on:
+        - The maximal number of individuals who were ExtremeAgainst,
+        - The maximal number of individuals who were ExtremeFor,
+        - The maximal number of individuals in either extreme group.
+    
+        Returns:
+            dict: A dictionary with keys:
+                  'extreme_against_day': day with max ExtremeAgainst count,
+                  'extreme_for_day': day with max ExtremeFor count,
+                  'total_extremes_day': day with max total extremes count.
+        """
+        # Retrieve thresholds from categories
+        extreme_against_range = self.categories["ExtremeAgainst"]
+        extreme_for_range = self.categories["ExtremeFor"]
+    
+        max_extreme_against = 0
+        max_extreme_for = 0
+        max_total_extremes = 0
+        extreme_against_day = None
+        extreme_for_day = None
+        total_extremes_day = None
+    
+        # Identify all time steps across all individuals
+        time_periods = set()
+        for individual in self.individuals.values():
+            time_periods.update(individual.opinion_history.keys())
+        time_periods = sorted(time_periods)  # Ensure sorted order
+    
+        for t in time_periods:
+            num_extreme_against = 0
+            num_extreme_for = 0
+    
+            # Count individuals in extreme categories at time t
+            for individual in self.individuals.values():
+                if t in individual.opinion_history:
+                    opinion = individual.opinion_history[t]
+                    if extreme_against_range[0] <= opinion < extreme_against_range[1]:
+                        num_extreme_against += 1
+                    elif extreme_for_range[0] <= opinion <= extreme_for_range[1]:
+                        num_extreme_for += 1
+    
+            total_extremes = num_extreme_against + num_extreme_for
+    
+            # Update maximums and their corresponding days
+            if num_extreme_against > max_extreme_against:
+                max_extreme_against = num_extreme_against
+                extreme_against_day = t
+    
+            if num_extreme_for > max_extreme_for:
+                max_extreme_for = num_extreme_for
+                extreme_for_day = t
+    
+            if total_extremes > max_total_extremes:
+                max_total_extremes = total_extremes
+                total_extremes_day = t
+    
+        return {
+            "extreme_against_day": extreme_against_day,
+            "extreme_for_day": extreme_for_day,
+            "total_extremes_day": total_extremes_day,
+        }
+
     
     def activity_summary(self, t):
         """
