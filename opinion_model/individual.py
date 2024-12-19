@@ -5,7 +5,7 @@ class Individual():
     """
     A class representing an individual that is part of an opinion model
     """
-    def __init__(self, settings, lower=0, upper=1, x=0, y=0):
+    def __init__(self, settings, lower=0, upper=1):
         
         # Settings
         self.beta_update = settings.beta_update
@@ -17,15 +17,15 @@ class Individual():
         self.gamma_extr = settings.gamma_extr
         
         # State
-        self.location = Location(x, y)
+        self.location = Location(np.random.uniform(lower, upper), np.random.uniform(lower, upper))
         self.opinion = np.random.uniform(lower, upper)
         self.opinion_history = {0 : self.opinion} # Store initial opinion in opinion history dictionary indexed by time period
         
     def __repr__(self):
-        return f"{self.id}"
+        return f"{self.location}"
         
     def __str__(self):
-        return f"{self.id} {self.location} with opinion {self.opinion}"  
+        return f"{self.location} with opinion {self.opinion}"  
         
 class PositiveIndividual(Individual):
     """

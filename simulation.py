@@ -3,36 +3,122 @@ from opinion_model.individual import NegativeIndividual
 from opinion_model.individual import PositiveIndividual
 from opinion_model.individual import UnbiasedIndividual
 from opinion_model.location import Location
+from opinion_model.activity import Activity
 import numpy as np
 import random
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.collections import LineCollection
-from matplotlib.patches import Patch
+from sklearn.cluster import KMeans
+import statsmodels.api as sm
+import seaborn as sns
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_squared_error
 
 class Simulation:
     """
     A class representing an opinion model simulation.
     """
     categories = {
-        "ExtremeAgainst": (0.0, 0.2),
-        "ModerateAgainst": (0.2, 0.4),
-        "Neutral": (0.4, 0.6),
-        "ModerateFor": (0.6, 0.8),
-        "ExtremeFor": (0.8, 1.0)
+        "ExtremeAgainst": (0.0, 0.2, "red"),
+        "ModerateAgainst": (0.2, 0.4, "orange"),
+        "Neutral": (0.4, 0.6, "gray"),
+        "ModerateFor": (0.6, 0.8, "blue"),
+        "ExtremeFor": (0.8, 1.0, "green")
     }
     
     @classmethod
     def _categorise_opinion(cls, opinion):
-        for category, (low, high) in Simulation.categories.items():
+        for category, (low, high, colour) in Simulation.categories.items():
             if low <= opinion < high:
                 return category
         return None
     
     @classmethod
-    def ensemble_statistics(cls):
-        pass
-    
+    def ensemble_statistics(cls, n, settings):
+        """
+        Perform the simulation n times and generate ensemble statistics with a pair-plot.
+        
+        Args:
+            N (int): Number of simulations to run.
+            settings: Settings for each run of the simulation.
+            
+        Returns:
+            pd.DataFrame: DataFrame with ensemble statistics for each simulation.
+        """
+        # List to store the statistics for each simulation
+        ensemble_data = []
+
+        for i in range(n):
+            # Create a new simulation instance with the given settings
+            simulation = Simulation(settings)
+
+            # Run the simulation
+            simulation.run()
+
+            # Collect statistics for this simulation
+            stats = {
+                "Negative Individuals": simulation._get_negative_count(),
+                "Positive Individuals": simulation._get_positive_count(),
+                "Max ExtremeAgainst": simulation._get_max_extreme_against(),
+                "Max ExtremeFor": simulation._get_max_extreme_for(),
+                "Max Involved in any activity": simulation._get_max_involved_activity()
+            }
+
+            # Add this simulation's statistics to the ensemble data
+            ensemble_data.append(stats)
+
+        # Convert the ensemble data into a pandas DataFrame
+        df_ensemble = pd.DataFrame(ensemble_data)
+
+        # Create a pair-plot to visualize the ensemble statistics
+        sns.pairplot(df_ensemble)
+        plt.suptitle("Ensemble Statistics Pair-Plot", y=1.02)
+        plt.show()
+
+        return df_ensemble
+
+    # Helper methods for ensemble statistics
+    def _get_negative_count(self):
+        """Number of individuals in negative states (ExtremeAgainst or ModerateAgainst)."""
+        return sum(
+            1 for individual in self.individuals.values()
+            if Simulation._categorise_opinion(individual.opinion) in ["ExtremeAgainst", "ModerateAgainst"]
+        )
+
+    def _get_positive_count(self):
+        """Number of individuals in positive states (ModerateFor or ExtremeFor)."""
+        return sum(
+            1 for individual in self.individuals.values()
+            if Simulation._categorise_opinion(individual.opinion) in ["ModerateFor", "ExtremeFor"]
+        )
+
+    def _get_max_extreme_against(self):
+        """Maximum number of individuals in ExtremeAgainst at any one time."""
+        return max(
+            sum(
+                Simulation._categorise_opinion(opinion) == "ExtremeAgainst"
+                for opinion in [individual.opinion_history[t] for individual in self.individuals.values()]
+            )
+            for t in range(self.t)
+        )
+
+    def _get_max_extreme_for(self):
+        """Maximum number of individuals in ExtremeFor at any one time."""
+        return max(
+            sum(
+                Simulation._categorise_opinion(opinion) == "ExtremeFor"
+                for opinion in [individual.opinion_history[t] for individual in self.individuals.values()]
+            )
+            for t in range(self.t)
+        )
+
+    def _get_max_involved_activity(self):
+        """Maximum number of individuals assigned to any activity."""
+        return max(
+            len(self.op_mod_graph.get_edges_node(activity))
+            for activity in self.activities.keys()
+        )    
     def __init__(self, settings):
         """
         Initialise the simulation as follows:
@@ -45,10 +131,14 @@ class Simulation:
         Parameters:
             settings (Settings)
         """
+        
         self.n = settings.n     # Number of individuals in simulation
         self.n_l = settings.n_l # Locations for individuals
         self.g = settings.g     # Number of activity periods and activities
         self.g_l = settings.g_l # Locations for activities
+        
+        # Used for time summary plot
+        self.overall_summary = pd.DataFrame(columns=["Activity", "time"] + list(Simulation.categories.keys()))
         
         if(self.g[0] <= 0 or self.g[1] <= 0):
             raise ValueError("Number of activity periods and activies must be greater than zero")
@@ -100,32 +190,34 @@ class Simulation:
             if len(self.n_l) != self.n:
                 raise ValueError("Mismatch between n_l dimensions and number of individuals.")
             
-            # Loop through individuals and assign locations sequentially using n_l values
+            # Assign individual locations sequentially using n_l values, overwriting
+            # randomly assigned locations
             for i, individual_id in enumerate(self.individuals):
                 self.individuals[individual_id].location = Location(*self.n_l[i])    
         
-        # Iterate through periods and assign activities with locations
+        # Iterate through activity periods and assign activities with locations
         for period_index, activity_count in enumerate(self.g, start=1):  
+            
             # Create activities for the current period
             activities = [
                 self.op_mod_graph.add_node(group=period_index)
                 for _ in range(activity_count)
             ]
-
-            # Assign locations based on g_l if provided, otherwise use random locations
+        
+            # Assign Activity locations based on g_l if provided, otherwise use random locations
             if self.g_l is not None:
-                if len(self.g_l) < len(self.g) or len(self.g_l[period_index - 1]) < activity_count:
+                if len(self.g_l) != len(self.g) or len(self.g_l[period_index - 1]) != activity_count:
                     raise ValueError("Mismatch between g_l dimensions and activity periods or counts.")
-
-                # Assign locations from g_l for the current period
+        
+                # Assign Activity objects with locations from g_l for the current period
                 self.activities.update({
-                    activity: Location(*self.g_l[period_index - 1][i])
+                    activity: Activity(*self.g_l[period_index - 1][i])
                     for i, activity in enumerate(activities)
                 })
             else:
-                # Assign random locations if g_l is not provided
+                # Assign Activity objects with random locations if g_l is not provided
                 self.activities.update({
-                    activity: Location(random.uniform(0, 1), random.uniform(0, 1))
+                    activity: Activity(random.uniform(0, 1), random.uniform(0, 1))
                     for activity in activities
                 })
 
@@ -159,6 +251,7 @@ class Simulation:
         Returns:
             List[Tuple[int, float]]: List of (activity_id, probability) tuples, sorted by probability.
         """
+        
         # Retrieve activities for the specified group
         activities = {
             activity_id: self.activities[activity_id]
@@ -169,8 +262,9 @@ class Simulation:
         # Set location of the individual of interest
         individual_location = Location(x, y)
         
-        # Calculate Euclidean distances from the individual's location to each activity's location
-        distances = np.array([Location.distance(individual_location, activity)
+        # Calculate distances (assumption that this is the Euclidean distance)
+        # from the individual's location to each activity's location
+        distances = np.array([Location.distance(individual_location, activity.location)
                               for activity in activities.values()])
         
         # Calculate exponential terms
@@ -205,14 +299,16 @@ class Simulation:
         Returns:
             pd.DataFrame: A DataFrame containing the updated opinions.
         """
+        
         # Convert opinions DataFrame to a numpy array for computation
-        opinion_values = opinions["opinion"].values  # Shape: (num_opinions,)
+        opinion_values = opinions["opinion"].values  
         num_opinions = len(opinion_values)
     
         # Placeholder for new opinions
         new_opinions = opinion_values.copy()
     
         for i, phi_i in enumerate(opinion_values):
+            
             # Determine if the individual becomes completely convinced
             if np.random.rand() < self.gamma_extr:
                 if phi_i == 0.5:
@@ -222,7 +318,9 @@ class Simulation:
                 else:
                     new_opinions[i] = 1
             else:
-                # Proceed with the regular opinion update process
+                
+                # Otherwise perform regular opinion update process
+                
                 # Create a matrix of differences: (phi_j - phi_i) for all i, j
                 opinion_diff = opinion_values.reshape(1, -1) - opinion_values.reshape(-1, 1)  # Shape: (num_opinions, num_opinions)
     
@@ -250,30 +348,31 @@ class Simulation:
             activity: Node identifier for the activity.
             t: Current time step.
         """
+        
         # Find the individuals attending the activity
         individual_ids = [edge[0] for edge in self.op_mod_graph.get_edges_node(activity)]
     
         # Get opinions of individuals for the previous time step
-        opinions = self.get_opinion(t - 1)
+        opinions = self.get_opinion(t-1)
     
         # Filter opinions to include only the relevant individuals
         opinions = opinions[opinions["id"].isin(individual_ids)].reset_index(drop=True)
     
-        # Check if there are any opinions to process
-        if opinions.empty:
-            raise ValueError(f"No individuals attended activity {activity} at time {t}.")
+        # Only update opinions if the activity has attendees in the specified time period
+        if not opinions.empty:
     
-        # Pass only the "opinion" column to the update method
-        updated_opinions = self._perform_opinion_update(opinions[["opinion"]])
-    
-        # Update each individual's opinion history with the new opinions
-        for idx, individual_id in enumerate(individual_ids):
-            updated_opinion = updated_opinions.iloc[idx, 0]
-            self.individuals[individual_id].opinion = updated_opinion
-            self.individuals[individual_id].opinion_history[t] = updated_opinion          
+            # Pass only the "opinion" column to the update method
+            updated_opinions = self._perform_opinion_update(opinions[["opinion"]])
+        
+            # Update each individual's opinion history with the new opinions
+            for idx, individual_id in enumerate(individual_ids):
+                updated_opinion = updated_opinions.iloc[idx, 0]
+                self.individuals[individual_id].opinion = updated_opinion
+                self.individuals[individual_id].opinion_history[t] = updated_opinion          
       
     def run(self):
         
+        all_summaries = []  # Will hold summary of totals for each category per time period
         num_activity_periods = len(self.g)  
         
         # For each day in total number of time periods, t...
@@ -295,7 +394,23 @@ class Simulation:
             for activity in activities.keys():
                 # Update the opinion of each individual attending each activity
                 self._perform_opinion_activity(activity, t)
+                self.activities[activity].run_history.append(t)
+                
+            # Store activity summary at this time period
+            df_activity_summary = self.activity_summary(t)
+            df_activity_summary["time"] = t
+            all_summaries.append(df_activity_summary)
         
+        # Combine all time-period summaries into a single dataframe
+        if all_summaries:
+            self.overall_summary = pd.concat(all_summaries).reset_index()    
+            
+        self.overall_summary = (
+            self.overall_summary.drop(columns="Activity") 
+            .groupby("time", as_index=False)          
+            .sum(numeric_only=True)                   
+            )
+
     def plot_network(self, time):
         """
         Plot the state of the population and activities at the given time.
@@ -303,90 +418,97 @@ class Simulation:
         Args:
             time (int): The time point at which to plot the network.
         """
-        # Define opinion group ranges and their colors
-        opinion_colors = {
-            "ExtremeAgainst": (0.0, 0.2, "red"),
-            "ModerateAgainst": (0.2, 0.4, "orange"),
-            "Neutral": (0.4, 0.6, "gray"),
-            "ModerateFor": (0.6, 0.8, "blue"),
-            "ExtremeFor": (0.8, 1.0, "green")
-        }
     
-        # Initialize figure
-        fig, ax = plt.subplots(figsize=(8, 8))
+        # Create a new figure
+        fig, ax = plt.subplots(figsize=(10, 8))
     
-        # Plot individuals
-        individuals_x = []
-        individuals_y = []
-        individual_colors = []
+        # Plot individuals with colors based on opinion categories
+        # Extract individual positions and opinions at the specified time
+        individual_positions = []
+        individual_colours = []
+    
         for individual in self.individuals.values():
-            if time in individual.opinion_history:
-                opinion = individual.opinion_history[time]
-                x, y = individual.location.x, individual.location.y
-                individuals_x.append(x)
-                individuals_y.append(y)
+            individual_positions.append((individual.location.x, individual.location.y))
     
-                # Assign a color based on opinion
-            color_assigned = False
-            for category, (lower, upper, color) in opinion_colors.items():
-                if lower <= opinion < upper:
-                    individual_colors.append(color)
-                    color_assigned = True
+            # Get opinion value at the current time
+            opinion = individual.opinion_history.get(time, individual.opinion)
+    
+            # Assign a color based on the opinion categories
+            for category, (lower, upper, colour) in self.categories.items():
+                if lower <= opinion <= upper:
+                    individual_colours.append(colour)  
                     break
-
-            # Handle missing color (shouldn't happen, but safeguard)
-            if not color_assigned:
-                individual_colors.append("black")  # Default to black if no range matches
-
-        # Ensure no mismatch in lengths
-        assert len(individuals_x) == len(individual_colors), (
-            f"Mismatch in sizes: {len(individuals_x)} coordinates but {len(individual_colors)} colors"
-            )
-        ax.scatter(individuals_x, individuals_y, c=individual_colors, s=50, label="Individuals")
+                
+        # Unpack individual positions for plotting
+        x_individuals, y_individuals = zip(*individual_positions)
+        ax.scatter(x_individuals, y_individuals, c=individual_colours, s=20, label="Individuals")
     
-        # Plot activities
-        activity_x = []
-        activity_y = []
-        activity_edges = []
+        # Plot active activities at the specified time
+        activity_positions = []
+        activity_lines = []  # Store lines between individuals and activities
+    
         for activity_id, activity in self.activities.items():
-            x, y = x, y = activity.x, activity.y
-            activity_x.append(x)
-            activity_y.append(y)
-
-            # Find participants of the activity
-            participants = [edge[0] for edge in self.op_mod_graph.get_edges_node(activity_id)]
-            for participant_id in participants:
-                participant = self.individuals[participant_id]
-                if time in participant.opinion_history:
-                    activity_edges.append(((participant.location.x, participant.location.y), (x, y)))
+            if time in activity.run_history:  # Only consider activities running at this time
+                # Add activity position (as black triangles)
+                x, y = activity.location.x, activity.location.y
+                activity_positions.append((x, y))
     
-        ax.scatter(activity_x, activity_y, c="black", s=100, marker="^", label="Activities")
+                # Use get_edges_node to find individuals connected to this activity
+                edges = self.op_mod_graph.get_edges_node(activity_id)
     
-        # Add edges (lines) between participants and activities
-        if activity_edges:
-            line_segments = LineCollection(activity_edges, colors="black", linewidths=0.5)
-            ax.add_collection(line_segments)
+                # For each edge, find the individual's position and store the line
+                for edge in edges:
+                    individual_id = edge[0] if edge[1] == activity_id else edge[1] 
+                    individual = self.individuals[individual_id]
+                    activity_lines.append([(individual.location.x, individual.location.y), (x, y)])
     
-        # Add legend
-        legend_elements = [
-            Patch(facecolor=color, edgecolor="black", label=label)
-            for label, (_, _, color) in opinion_colors.items()
-        ]
-        legend_elements.append(Patch(facecolor="black", edgecolor="black", label="Activities"))
-        ax.legend(handles=legend_elements, loc="upper right")
+        # Unpack activity positions for plotting
+        if activity_positions:
+            x_activities, y_activities = zip(*activity_positions)
+            ax.scatter(x_activities, y_activities, c='black', marker='^', s=100, label="Activities")
     
-        # Set plot limits and labels
+        # Draw lines between individuals and assigned activities
+        if activity_lines:
+            line_collection = LineCollection(activity_lines, colors='gray', linewidths=0.5)
+            ax.add_collection(line_collection)
+    
+        # Step 4: Finalize plot
+        ax.axis("off")
+        ax.set_title(f"Opinions at Time {time}")
         ax.set_xlim(0, 1)
         ax.set_ylim(0, 1)
-        ax.set_xlabel("X Location")
-        ax.set_ylabel("Y Location")
-        ax.set_title(f"Network State at Time {time}")
     
+        # Add a detailed legend for the opinion categories
+        legend_elements = [
+            plt.Line2D([0], [0], marker='o', color='w', markerfacecolor=colour, markersize=8, label=category)
+            for category, (_, _, colour) in Simulation.categories.items()
+        ]
+        legend_elements.append(plt.Line2D([0], [0], marker='^', color='w', markerfacecolor='black', markersize=10, label="Activities"))
+        legend_elements.append(plt.Line2D([0], [0], color='gray', lw=1, label="Connections"))
+        ax.legend(
+            handles=legend_elements, 
+            loc='best', 
+            bbox_to_anchor=(1, 0.5),  
+            borderaxespad=0
+        )
+        plt.tight_layout()
         plt.show()
-
     
     def chart(self):
-        pass
+        for category, (_, _, colour) in Simulation.categories.items():
+            plt.plot(
+                self.overall_summary["time"], 
+                self.overall_summary[category], 
+                label=category, 
+                color=colour
+            )
+
+        plt.xlabel("Time")
+        plt.ylabel("Number")
+        plt.title("Opinion Changes Over Time")
+        plt.legend(title="Type")
+        plt.grid(True)
+        plt.show()
 
     def most_polarised(self):
         """
@@ -402,8 +524,8 @@ class Simulation:
                   'total_extremes': maximal count of all individuals in extreme groups.
         """
         # Retrieve thresholds from categories
-        extreme_against_range = self.categories["ExtremeAgainst"]
-        extreme_for_range = self.categories["ExtremeFor"]
+        extreme_against_range = Simulation.categories["ExtremeAgainst"]
+        extreme_for_range = Simulation.categories["ExtremeFor"]
     
         max_extreme_against = 0
         max_extreme_for = 0
@@ -413,7 +535,7 @@ class Simulation:
         time_periods = set()
         for individual in self.individuals.values():
             time_periods.update(individual.opinion_history.keys())
-        time_periods = sorted(time_periods)  # Ensure sorted order
+        time_periods = sorted(time_periods) 
     
         for t in time_periods:
             num_extreme_against = 0
@@ -455,8 +577,8 @@ class Simulation:
                   'total_extremes_day': day with max total extremes count.
         """
         # Retrieve thresholds from categories
-        extreme_against_range = self.categories["ExtremeAgainst"]
-        extreme_for_range = self.categories["ExtremeFor"]
+        extreme_against_range = Simulation.categories["ExtremeAgainst"]
+        extreme_for_range = Simulation.categories["ExtremeFor"]
     
         max_extreme_against = 0
         max_extreme_for = 0
@@ -469,7 +591,7 @@ class Simulation:
         time_periods = set()
         for individual in self.individuals.values():
             time_periods.update(individual.opinion_history.keys())
-        time_periods = sorted(time_periods)  # Ensure sorted order
+        time_periods = sorted(time_periods)  
     
         for t in time_periods:
             num_extreme_against = 0
@@ -567,10 +689,225 @@ class Simulation:
         return df_pivot
         
     def individual_summary(self):
-        pass
+        """
+        Generate a summary of the percentage of time each individual spends in each opinion state.
+        
+        Returns:
+            pd.DataFrame: A DataFrame with the following columns:
+            - 'X': X-coordinate of the individual.
+            - 'Y': Y-coordinate of the individual.
+            - 'ExtremeAgainst'
+            - 'ModerateAgainst'
+            - 'Neutral'
+            - 'ModerateFor'
+            - 'ExtremeFor'
+        """
+        # Initialize a list to store data for each individual
+        data = []
+        
+        # Iterate over individuals
+        for individual_id, individual in self.individuals.items():
+            
+            # Categorize opinions for each time step
+            categories = [
+                Simulation._categorise_opinion(opinion)
+                for opinion in individual.opinion_history.values()
+            ]
+            
+            # Calculate the percentage of time spent in each category
+            category_counts = pd.Series(categories).value_counts(normalize=True) * 100
+            
+            # Ensure all categories are included in the result (even if they have 0%)
+            percentages = {
+                f"{category}": category_counts.get(category, 0)
+                for category in Simulation.categories.keys()
+            }
+            
+            # Add the individual's data to the list
+            data.append({
+                "X": individual.location.x,
+                "Y": individual.location.y,
+                **percentages
+            })
     
-    def friendship_summary(self):
-        pass
+        # Create a DataFrame from the collected data
+        return pd.DataFrame(data)
     
-    def friendship_similarlity_chart(self):
-        pass
+    def get_elbow_plot(self, t, max_clusters=10):
+        """
+        Generates an elbow plot for opinuions at a particular time.
+        
+        Args:
+            t (int): Timepoint for clustering.
+            max_clusters (int): Maximum number of clusters to evaluate.
+        """
+        # Extract opinions and locations for specified time
+        data = [
+            (individual.location.x, individual.location.y, individual.opinion_history[t])
+            for individual in self.individuals.values()
+            if t in individual.opinion_history
+        ]
+        data = np.array(data)  
+
+        # Compute inertia for different numbers of clusters
+        inertia = []
+        for k in range(1, max_clusters + 1):
+            kmeans = KMeans(n_clusters=k, random_state=42)
+            kmeans.fit(data)
+            inertia.append(kmeans.inertia_)
+
+        # Plot the elbow plot
+        plt.figure(figsize=(8, 6))
+        plt.plot(range(1, max_clusters + 1), inertia, marker="o")
+        plt.xticks(range(1, max_clusters + 1))
+        plt.xlabel("Number of Clusters")
+        plt.ylabel("Distortion (inertia)")
+        plt.title(f"Elbow Plot for KMeans Clustering (Time {t})")
+        plt.grid(True)
+        plt.show()
+
+    def kmeans_clustering(self, t, n_clusters=3):
+        """
+        Performs KMeans clustering on opinions.
+
+        Args:
+            t (int): Timepoint for clustering.
+            n_clusters (int): Number of clusters to use in KMeans.
+        """
+        
+        # Extract opinions and locations at time `t`
+        data = [
+            (individual.location.x, individual.location.y, individual.opinion_history[t])
+            for individual in self.individuals.values()
+            if t in individual.opinion_history
+        ]
+        data = np.array(data)  # Convert to NumPy array
+
+        # Apply KMeans clustering
+        kmeans = KMeans(n_clusters=n_clusters, random_state=42)
+        labels = kmeans.fit_predict(data)
+
+        # Plot individuals in (x, y) space, colored by cluster
+        plt.figure(figsize=(8, 8))
+        scatter = plt.scatter(
+            data[:, 0],  # x-coordinates
+            data[:, 1],  # y-coordinates
+            c=labels,  # Cluster labels as colors
+            cmap="tab10",  # Discrete color map
+            s=50,  # Marker size
+            alpha=0.7,  # Transparency
+        )
+        plt.xlabel("X")
+        plt.ylabel("Y")
+        plt.title(f"KMeans Clustering at Time {t} (k = {n_clusters})")
+        plt.colorbar(scatter, label="Cluster")
+        plt.grid(True)
+        plt.show()
+        
+    def fit_regression_model(self, predictors=None):
+        """
+        Fit a linear regression model to predict final opinions based on selected independent variables.
+    
+        Args:
+            predictors (list, optional): A list of column names to use as predictors. 
+                                         Defaults to all available predictors.
+    
+        Returns:
+            Regression model
+        """
+        
+        # Extract data needed for regression
+        df = self._get_model_data()
+    
+        # Default to all predictors if none are specified
+        if predictors is None:
+            predictors = ["InitialOpinion", "DistanceToCentre", "NearestActivityDistance"] + \
+                         [col for col in df.columns if col.startswith("ActivityMembership_")]
+        
+        # Define independent variables (X) and dependent variable (y)
+        X = df[predictors]  
+        y = df["FinalOpinion"]  
+        
+        # Add a constant term to the model for the intercept
+        X = sm.add_constant(X)
+    
+        # Fit the OLS regression model
+        return sm.OLS(y, X).fit()
+    
+    def cross_validate_model(self, predictors=None):
+        """
+        Fit a linear regression model using training data then validate by making predictions
+        using test data.
+    
+        Args:
+            predictors (list, optional): A list of column names to use as predictors. 
+                                         Defaults to all available predictors.
+    
+        Returns:
+            Mean Square Error (MSE) of the predictions
+        """
+        
+        # Extract data needed for regression
+        df = self._get_model_data()
+    
+        # Default to all predictors if none are specified
+        if predictors is None:
+            predictors = ["InitialOpinion", "DistanceToCentre", "NearestActivityDistance"] + \
+                         [col for col in df.columns if col.startswith("ActivityMembership_")]
+        
+        # Split data
+        X = df[predictors]
+        y = df["FinalOpinion"]
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
+        
+        # Fit the model on training data
+        X_train = sm.add_constant(X_train)
+        model = sm.OLS(y_train, X_train).fit()
+        
+        # Evaluate on testing data
+        X_test = sm.add_constant(X_test)
+        y_pred = model.predict(X_test)
+        return mean_squared_error(y_test, y_pred) 
+    
+    def _get_model_data(self):
+        data = []   
+        for individual_id, individual in self.individuals.items():      
+            initial_opinion = individual.opinion_history[0]
+            final_opinion = individual.opinion_history[max(individual.opinion_history.keys())]
+            distance_to_centre = np.sqrt(individual.location.x**2 + individual.location.y**2)
+    
+            # Distance to the nearest activity
+            distances_to_activities = [
+                Location.distance(individual.location, activity.location)
+                for activity in self.activities.values()
+            ]
+            nearest_activity_distance = min(distances_to_activities)
+    
+            # Activity memberships
+            activity_memberships = [
+                activity_id for activity_id, activity in self.activities.items()
+                if individual_id in [edge[0] for edge in self.op_mod_graph.get_edges_node(activity_id)]
+            ]
+            activity_membership = activity_memberships[0] if activity_memberships else None
+    
+            # Append the data for this individual
+            data.append({
+                "InitialOpinion": initial_opinion,
+                "FinalOpinion": final_opinion,
+                "DistanceToCentre": distance_to_centre,
+                "NearestActivityDistance": nearest_activity_distance,
+                "ActivityMembership": activity_membership
+            })
+    
+        # Create a DataFrame from the collected data
+        df = pd.DataFrame(data)
+    
+        # Create dummy variables for activity membership
+        df = pd.get_dummies(df, columns=["ActivityMembership"], drop_first=True)
+        
+        # Convert boolean columns to numeric (if any exist)
+        bool_columns = df.select_dtypes(include="bool").columns
+        df[bool_columns] = df[bool_columns].astype(int)
+        
+        return df
+
