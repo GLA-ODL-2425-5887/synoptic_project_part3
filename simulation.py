@@ -300,43 +300,48 @@ class Simulation:
             pd.DataFrame: A DataFrame containing the updated opinions.
         """
         
-        # Convert opinions DataFrame to a numpy array for computation
-        opinion_values = opinions["opinion"].values  
+        # Convert opinions DataFrame to a numpy array
+        opinion_values = opinions["opinion"].values
         num_opinions = len(opinion_values)
     
-        # Placeholder for new opinions
+        # Work on a copy of the opinions for safety
         new_opinions = opinion_values.copy()
     
-        for i, phi_i in enumerate(opinion_values):
+        # Random values to decide if individuals become "completely convinced"
+        random_values = np.random.rand(num_opinions)
+    
+        # Identify individuals who are "completely convinced"
+        are_convinced = random_values < self.gamma_extr
+    
+        # If phi_i == 0.5 -> Randomly choose 0 or 1
+        new_opinions[are_convinced & (opinion_values == 0.5)] = np.random.randint(
+            2, size=np.sum(are_convinced & (opinion_values == 0.5)))
+    
+        # If phi_i < 0.5 -> Set to 0; If phi_i > 0.5 -> Set to 1
+        new_opinions[are_convinced & (opinion_values < 0.5)] = 0
+        new_opinions[are_convinced & (opinion_values > 0.5)] = 1
+    
+        # For the remaining individuals, perform the regular opinion update process
+        not_convinced = ~are_convinced
+    
+        if np.any(not_convinced):  # Proceed only if there are non-convinced individuals
             
-            # Determine if the individual becomes completely convinced
-            if np.random.rand() < self.gamma_extr:
-                if phi_i == 0.5:
-                    new_opinions[i] = np.random.randint(2)  # Either 0 or 1
-                elif phi_i < 0.5:
-                    new_opinions[i] = 0
-                else:
-                    new_opinions[i] = 1
-            else:
-                
-                # Otherwise perform regular opinion update process
-                
-                # Create a matrix of differences: (phi_j - phi_i) for all i, j
-                opinion_diff = opinion_values.reshape(1, -1) - opinion_values.reshape(-1, 1)  # Shape: (num_opinions, num_opinions)
+            # Create a matrix of differences: (phi_j - phi_i) for all i, j
+            opinion_diff = opinion_values.reshape(1, -1) - opinion_values.reshape(-1, 1)
     
-                # Compute the exponential decay term: exp(-beta_spread * abs(phi_i - phi_j))
-                exp_decay = np.exp(-self.beta_spread * np.abs(opinion_diff))  # Shape: (num_opinions, num_opinions)
+            # Compute the exponential decay term
+            exp_decay = np.exp(-self.beta_spread * np.abs(opinion_diff))
     
-                # Compute the sum for each phi_i, excluding self-contribution (diagonal)
-                update_terms = np.sum(opinion_diff * exp_decay, axis=1) / num_opinions  # Shape: (num_opinions,)
+            # Compute the sum for each phi_i
+            update_terms = np.sum(opinion_diff * exp_decay, axis=1) / num_opinions
     
-                # Update opinion using the formula
-                new_opinions[i] = phi_i + self.beta_update * update_terms[i]
+            # Update opinions using the formula
+            new_opinions[not_convinced] = opinion_values[not_convinced] + self.beta_update * update_terms[not_convinced]
     
-        # Clamp updated opinions to the range [0, 1]
+        # Clamp updated opinions to the range [0, 1] (just in case values exceed bounds)
         new_opinions = np.clip(new_opinions, 0, 1)
     
-        # Convert the updated opinions back to a DataFrame
+        # Convert the updated opinions back to a DataFrame and return it
         return pd.DataFrame(new_opinions, columns=["updated_opinion"])
 
     
@@ -756,7 +761,7 @@ class Simulation:
             kmeans.fit(data)
             inertia.append(kmeans.inertia_)
 
-        # Plot the elbow plot
+        # Plot
         plt.figure(figsize=(8, 6))
         plt.plot(range(1, max_clusters + 1), inertia, marker="o")
         plt.xticks(range(1, max_clusters + 1))
@@ -766,7 +771,7 @@ class Simulation:
         plt.grid(True)
         plt.show()
 
-    def kmeans_clustering(self, t, n_clusters=3):
+    def kmeans_clustering(self, t, n_clusters=4):
         """
         Performs KMeans clustering on opinions.
 
@@ -781,7 +786,7 @@ class Simulation:
             for individual in self.individuals.values()
             if t in individual.opinion_history
         ]
-        data = np.array(data)  # Convert to NumPy array
+        data = np.array(data)
 
         # Apply KMeans clustering
         kmeans = KMeans(n_clusters=n_clusters, random_state=42)
@@ -793,7 +798,7 @@ class Simulation:
             data[:, 0],  # x-coordinates
             data[:, 1],  # y-coordinates
             c=labels,  # Cluster labels as colors
-            cmap="tab10",  # Discrete color map
+            cmap="Blues",  # Color map
             s=50,  # Marker size
             alpha=0.7,  # Transparency
         )
