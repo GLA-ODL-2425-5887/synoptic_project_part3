@@ -1,18 +1,23 @@
 from simulation import Simulation
 from settings import Settings
+import matplotlib.pyplot as plt
 
-settings = Settings(n=20)
+def plot_opinion_distribution(opinions, step):
+    plt.hist(opinions, bins=10, range=(0, 1), alpha=0.7)
+    plt.title(f"Opinion Distribution at Step {step}")
+    plt.xlabel("Opinion")
+    plt.ylabel("Count")
+    plt.show()
+
+
+settings = Settings(beta_update=0)
 simulation = Simulation(settings)
+opinions = simulation.get_opinion(0)["opinion"]
+plot_opinion_distribution(opinions, 0)
+print(simulation.activity_summary(0))
 simulation.run()
+opinions = simulation.get_opinion(500)["opinion"]
+plot_opinion_distribution(opinions, 500)
+simulation.chart()
+print(simulation.activity_summary(500))
 
-
-# Use default predictors
-model_full = simulation.fit_regression_model()
-
-# Use only specific predictors from list...
-# ["InitialOpinion", "DistanceToCentre", "NearestActivityDistance"]
-selected_predictors = ["InitialOpinion", "DistanceToCentre"]
-model_reduced = simulation.fit_regression_model(predictors=selected_predictors)
-
-# Summary of the fitted model
-print(model_full.summary())

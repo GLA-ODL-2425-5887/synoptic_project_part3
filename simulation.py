@@ -30,7 +30,7 @@ class Simulation:
     @classmethod
     def _categorise_opinion(cls, opinion):
         for category, (low, high, colour) in Simulation.categories.items():
-            if low <= opinion < high:
+            if low <= opinion <= high:
                 return category
         return None
     
@@ -773,11 +773,11 @@ class Simulation:
 
     def kmeans_clustering(self, t, n_clusters=4):
         """
-        Performs KMeans clustering on opinions.
+        Performs K Means clustering on opinions.
 
         Args:
             t (int): Timepoint for clustering.
-            n_clusters (int): Number of clusters to use in KMeans.
+            n_clusters (int): Number of clusters to use in K Means.
         """
         
         # Extract opinions and locations at time `t`
