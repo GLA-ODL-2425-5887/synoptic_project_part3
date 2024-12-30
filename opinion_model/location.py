@@ -4,7 +4,6 @@ class Location:
     """
     A class representing a location using coordinates x and y.
     """
-    
     @classmethod
     def distance(cls, a, b):
         """

@@ -277,6 +277,15 @@ class Simulation:
         return list(zip(activities.keys(), probabilities))  
 
     def get_opinion(self, time):
+        """
+        Retrieve the opinions of all individuals at time t.
+        
+        Args:
+            time (int): Time period.
+            
+        Returns:
+            pd.DataFrame: DataFrame with id and opinion.
+        """
         opinions = []
         for individual_id in self.op_mod_graph.get_nodes(group=0):
             individual = self.individuals[individual_id]
@@ -376,7 +385,9 @@ class Simulation:
                 self.individuals[individual_id].opinion_history[t] = updated_opinion          
       
     def run(self):
-        
+        """
+        Orchestrate execution of the simulation. 
+        """
         all_summaries = []  # Will hold summary of totals for each category per time period
         num_activity_periods = len(self.g)  
         
@@ -500,6 +511,9 @@ class Simulation:
         plt.show()
     
     def chart(self):
+        """
+        Draws a line plot showing how the number of individuals in each opinion category 
+        """
         for category, (_, _, colour) in Simulation.categories.items():
             plt.plot(
                 self.overall_summary["time"], 
@@ -635,13 +649,15 @@ class Simulation:
     
     def activity_summary(self, t):
         """
-        Summarizes opinions of individuals at time `t` into specified categories, grouped by activity.
+        Summarizes opinions of individuals at time `t` into specified categories, 
+        grouped by activity.
         
         Parameters:
             t (int): The time step for which opinions are being summarized.
             
         Returns:
-            pd.DataFrame: A summary DataFrame grouped by activity, with counts for each category.
+            pd.DataFrame: A summary DataFrame grouped by activity, with counts 
+            for each opinion category.
         """
         # Initialize an empty list to collect data
         data = []
@@ -695,7 +711,8 @@ class Simulation:
         
     def individual_summary(self):
         """
-        Generate a summary of the percentage of time each individual spends in each opinion state.
+        Generate a summary of the percentage of time each individual spends in 
+        each opinion category.
         
         Returns:
             pd.DataFrame: A DataFrame with the following columns:
@@ -773,11 +790,11 @@ class Simulation:
 
     def kmeans_clustering(self, t, n_clusters=4):
         """
-        Performs K Means clustering on opinions.
+        Performs KMeans clustering on opinions.
 
         Args:
             t (int): Timepoint for clustering.
-            n_clusters (int): Number of clusters to use in K Means.
+            n_clusters (int): Number of clusters to use in KMeans.
         """
         
         # Extract opinions and locations at time `t`
